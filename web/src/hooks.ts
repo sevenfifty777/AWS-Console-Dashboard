@@ -8,6 +8,7 @@ import type {
   SessionState,
   SessionStatus,
   Settings,
+  SettingsPatch,
 } from '../../shared/types';
 import { api } from './api';
 
@@ -86,13 +87,24 @@ export function useAppState() {
   return useQuery({ queryKey: ['state'], queryFn: () => api<AppState>('/api/state') });
 }
 
-const statusUrl = (profile: string, force = false) =>
-  `/api/status?profile=${encodeURIComponent(profile)}${force ? '&force=1' : ''}`;
+/** The role name at the end of a role ARN. */
+export const roleName = (arn: string) => arn.split('/').pop() ?? arn;
 
-export function useStatus(profile: string | undefined, enabled = true) {
+/** The account ID inside a role ARN. */
+export const roleAccount = (arn: string) => /::(\d{12}):/.exec(arn)?.[1];
+
+export function statusUrl(profile: string, role?: string, force = false): string {
+  const params = new URLSearchParams({ profile });
+  if (role) params.set('role', role);
+  if (force) params.set('force', '1');
+  return `/api/status?${params.toString()}`;
+}
+
+/** Status of a profile, or of a role switched to from that profile. */
+export function useStatus(profile: string | undefined, enabled = true, role?: string) {
   return useQuery({
-    queryKey: ['status', profile],
-    queryFn: () => api<SessionStatus>(statusUrl(profile!)),
+    queryKey: ['status', profile, role ?? ''],
+    queryFn: () => api<SessionStatus>(statusUrl(profile!, role)),
     enabled: enabled && profile !== undefined,
     staleTime: 60_000,
     refetchInterval: 5 * 60_000,
@@ -101,14 +113,14 @@ export function useStatus(profile: string | undefined, enabled = true) {
 
 /** Checks a profile again now, skipping the server's short cache. */
 export async function recheckStatus(queryClient: QueryClient, profile: string): Promise<void> {
-  const status = await api<SessionStatus>(statusUrl(profile, true));
-  queryClient.setQueryData(['status', profile], status);
+  const status = await api<SessionStatus>(statusUrl(profile, undefined, true));
+  queryClient.setQueryData(['status', profile, ''], status);
 }
 
 export function useSaveSettings() {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: (patch: Partial<Settings>) => api<Settings>('/api/settings', { method: 'PUT', body: patch }),
+    mutationFn: (patch: SettingsPatch) => api<Settings>('/api/settings', { method: 'PUT', body: patch }),
     onSuccess: (settings) => {
       queryClient.setQueryData<AppState>(['state'], (old) => (old ? { ...old, settings } : old));
     },

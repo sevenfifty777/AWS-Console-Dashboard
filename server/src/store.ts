@@ -4,6 +4,8 @@ import { join } from 'node:path';
 import {
   LABEL_COLORS,
   REGION_PATTERN,
+  ROLE_ARN_PATTERN,
+  type ActiveRole,
   type AppState,
   type Favourite,
   type HistoryEntry,
@@ -14,6 +16,7 @@ import {
 
 const HISTORY_LIMIT = 200;
 const FAVOURITES_LIMIT = 100;
+const RECENT_ROLES_LIMIT = 8;
 
 /** Where the dashboard keeps its own settings. It never writes inside ~/.aws. */
 export function defaultDataDir(env: NodeJS.ProcessEnv = process.env): string {
@@ -55,7 +58,22 @@ export function cleanSettings(input: unknown, base: Settings): Settings {
     }
     next.labels = labels;
   }
+  if ('allRegions' in src) next.allRegions = src.allRegions === true ? true : undefined;
+  if ('activeRole' in src) next.activeRole = cleanRole(src.activeRole);
+  if (Array.isArray(src.recentRoles)) {
+    next.recentRoles = src.recentRoles
+      .map(cleanRole)
+      .filter((role): role is ActiveRole => role !== undefined)
+      .slice(0, RECENT_ROLES_LIMIT);
+  }
   return next;
+}
+
+function cleanRole(input: unknown): ActiveRole | undefined {
+  const item = (input && typeof input === 'object' ? input : {}) as Record<string, unknown>;
+  const profile = text(item.profile, 200);
+  const arn = text(item.arn, 700);
+  return profile && arn && ROLE_ARN_PATTERN.test(arn) ? { profile, arn } : undefined;
 }
 
 function cleanFavourites(input: unknown): Favourite[] {
@@ -79,10 +97,12 @@ function cleanHistory(input: unknown): HistoryEntry[] {
     const command = text(item.command, 20_000);
     const at = text(item.at, 40);
     if (!profile || !command || !at) continue;
+    const role = text(item.role, 700);
     result.push({
       profile,
       command,
       at,
+      role: role && ROLE_ARN_PATTERN.test(role) ? role : undefined,
       region: text(item.region, 30),
       exitCode: typeof item.exitCode === 'number' ? item.exitCode : null,
     });
@@ -131,7 +151,9 @@ export class Store {
   }
 
   addHistory(entry: HistoryEntry): void {
-    const others = this.state.history.filter((h) => !(h.profile === entry.profile && h.command === entry.command));
+    const others = this.state.history.filter(
+      (h) => !(h.profile === entry.profile && h.role === entry.role && h.command === entry.command),
+    );
     this.state.history = [entry, ...others].slice(0, HISTORY_LIMIT);
     this.save();
   }

@@ -9,6 +9,55 @@ export interface ResourceDef extends ResourceInfo {
   args: string[];
   /** JMESPath query returning a list of objects whose keys match the columns. */
   query: string;
+  /**
+   * For a view opened from a row of another view: the CLI option that receives the
+   * value taken from that row, and what a valid value looks like.
+   */
+  param?: { option: string; pattern: RegExp };
+  /** Tidies one row after the CLI answered, for what JMESPath cannot express. */
+  mapRow?: (row: Record<string, unknown>) => Record<string, unknown>;
+}
+
+/** Route 53 writes special characters as octal escapes (\052 is "*") and ends names with a dot. */
+function dnsName(value: unknown): unknown {
+  if (typeof value !== 'string') return value;
+  return value.replace(/\\(\d{3})/g, (_match, octal: string) => String.fromCharCode(parseInt(octal, 8))).replace(/\.$/, '');
+}
+
+/**
+ * Sums up the trust policy of a role: who is allowed to assume it.
+ * serviceOnly is true when only AWS services can, so a person cannot switch to it.
+ */
+function trustSummary(policy: unknown): { text: string; serviceOnly: boolean } {
+  const raw = (policy as { Statement?: unknown } | null)?.Statement;
+  const statements = Array.isArray(raw) ? raw : raw ? [raw] : [];
+  const parts = new Set<string>();
+  let nonService = false;
+
+  for (const statement of statements as { Effect?: string; Principal?: unknown }[]) {
+    if (statement?.Effect !== 'Allow') continue;
+    if (statement.Principal === '*') {
+      parts.add('Anyone');
+      nonService = true;
+      continue;
+    }
+    for (const [kind, value] of Object.entries((statement.Principal ?? {}) as Record<string, unknown>)) {
+      for (const principal of Array.isArray(value) ? value : [value]) {
+        if (typeof principal !== 'string') continue;
+        if (kind === 'Service') {
+          parts.add(`Service ${principal.replace(/\.amazonaws\.com$/, '')}`);
+          continue;
+        }
+        nonService = true;
+        const arn = /^arn:[^:]*:(?:iam|sts)::(\d{12}):(.+)$/.exec(principal);
+        if (kind === 'AWS' && arn) parts.add(arn[2] === 'root' ? `Account ${arn[1]}` : `${arn[2]} in ${arn[1]}`);
+        else if (kind === 'AWS' && /^\d{12}$/.test(principal)) parts.add(`Account ${principal}`);
+        else if (kind === 'Federated') parts.add(`Federated ${principal.split('/').pop()}`);
+        else parts.add(`${kind} ${principal}`);
+      }
+    }
+  }
+  return { text: [...parts].join('\n'), serviceOnly: parts.size > 0 && !nonService };
 }
 
 export const RESOURCES: ResourceDef[] = [
@@ -99,5 +148,77 @@ export const RESOURCES: ResourceDef[] = [
       { key: 'namespace', label: 'Namespace' },
       { key: 'updated', label: 'State changed' },
     ],
+  },
+  {
+    id: 'route53',
+    title: 'Route 53 hosted zones',
+    global: true,
+    args: ['route53', 'list-hosted-zones'],
+    query: 'HostedZones[].{name:Name,id:Id,private:Config.PrivateZone,records:ResourceRecordSetCount,comment:Config.Comment}',
+    columns: [
+      { key: 'name', label: 'Domain' },
+      { key: 'id', label: 'Zone ID' },
+      { key: 'visibility', label: 'Visibility' },
+      { key: 'records', label: 'Records' },
+      { key: 'comment', label: 'Comment' },
+    ],
+    mapRow: ({ private: isPrivate, ...row }) => ({
+      ...row,
+      name: dnsName(row.name),
+      id: String(row.id ?? '').replace(/^\/hostedzone\//, ''),
+      visibility: isPrivate ? 'Private' : 'Public',
+    }),
+    drill: { view: 'route53-records', paramKey: 'id', titleKey: 'name', label: 'Records' },
+  },
+  {
+    id: 'route53-records',
+    title: 'Route 53 records',
+    global: true,
+    parent: 'route53',
+    args: ['route53', 'list-resource-record-sets'],
+    param: { option: '--hosted-zone-id', pattern: /^[A-Z0-9]{1,32}$/ },
+    query:
+      'ResourceRecordSets[].{name:Name,type:Type,ttl:TTL,values:ResourceRecords[].Value,alias:AliasTarget.DNSName,setId:SetIdentifier,weight:Weight,failover:Failover,latencyRegion:Region}',
+    columns: [
+      { key: 'name', label: 'Name' },
+      { key: 'type', label: 'Type' },
+      { key: 'ttl', label: 'TTL (s)' },
+      { key: 'value', label: 'Value' },
+      { key: 'routing', label: 'Routing' },
+    ],
+    mapRow: ({ values, alias, setId, weight, failover, latencyRegion, ...row }) => ({
+      ...row,
+      name: dnsName(row.name),
+      // An alias record points at another AWS resource and has no values of its own.
+      value: alias ? `Alias to ${String(dnsName(alias))}` : Array.isArray(values) ? values.join('\n') : '',
+      // Only set for weighted, failover or latency records.
+      routing: [setId, typeof weight === 'number' ? `weight ${weight}` : null, failover, latencyRegion].filter(Boolean).join(' · '),
+    }),
+  },
+  {
+    // Shown by the IAM roles page, where a row can be switched to.
+    id: 'iam-roles',
+    title: 'IAM roles',
+    global: true,
+    hidden: true,
+    args: ['iam', 'list-roles'],
+    query:
+      'Roles[].{name:RoleName,path:Path,arn:Arn,description:Description,created:CreateDate,maxSession:MaxSessionDuration,trust:AssumeRolePolicyDocument}',
+    columns: [
+      { key: 'name', label: 'Role' },
+      { key: 'trustedBy', label: 'Who can use it' },
+      { key: 'description', label: 'Description' },
+      { key: 'maxHours', label: 'Longest session (h)' },
+      { key: 'created', label: 'Created' },
+    ],
+    mapRow: ({ trust, maxSession, ...row }) => {
+      const summary = trustSummary(trust);
+      return {
+        ...row,
+        trustedBy: summary.text,
+        serviceOnly: summary.serviceOnly,
+        maxHours: typeof maxSession === 'number' ? maxSession / 3600 : null,
+      };
+    },
   },
 ];

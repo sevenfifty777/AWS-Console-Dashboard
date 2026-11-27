@@ -30,9 +30,18 @@ export function findAwsCli(env: NodeJS.ProcessEnv = process.env): CliTarget | nu
   return null;
 }
 
+/** Temporary keys of an assumed role. */
+export interface RoleCredentials {
+  accessKeyId: string;
+  secretAccessKey: string;
+  sessionToken: string;
+}
+
 export interface RunOptions {
   profile?: string;
   region?: string;
+  /** Run as an assumed role. The profile is still used for its region and other settings. */
+  credentials?: RoleCredentials;
   timeoutMs?: number;
   maxBytes?: number;
   signal?: AbortSignal;
@@ -60,12 +69,24 @@ const OVERRIDING_VARS = new Set([
   'AWS_SECURITY_TOKEN',
 ]);
 
-export function childEnv(base: NodeJS.ProcessEnv, profile?: string, region?: string): NodeJS.ProcessEnv {
+export function childEnv(
+  base: NodeJS.ProcessEnv,
+  profile?: string,
+  region?: string,
+  credentials?: RoleCredentials,
+): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = {};
   for (const [key, value] of Object.entries(base)) {
     if (!OVERRIDING_VARS.has(key.toUpperCase())) env[key] = value;
   }
   if (profile) env.AWS_PROFILE = profile;
+  if (credentials) {
+    // Keys in the environment win over the profile's own sign-in, while the profile
+    // named by AWS_PROFILE still supplies the region and other settings.
+    env.AWS_ACCESS_KEY_ID = credentials.accessKeyId;
+    env.AWS_SECRET_ACCESS_KEY = credentials.secretAccessKey;
+    env.AWS_SESSION_TOKEN = credentials.sessionToken;
+  }
   if (region) {
     env.AWS_REGION = region;
     env.AWS_DEFAULT_REGION = region;
@@ -105,7 +126,7 @@ export function runAws(target: CliTarget, args: string[], options: RunOptions = 
     let settled = false;
 
     const child = spawn(target.command, [...target.prefixArgs, ...args], {
-      env: childEnv(process.env, options.profile, options.region),
+      env: childEnv(process.env, options.profile, options.region, options.credentials),
       shell: false,
       windowsHide: true,
       stdio: ['ignore', 'pipe', 'pipe'],

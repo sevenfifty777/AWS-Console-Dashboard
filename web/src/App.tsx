@@ -1,15 +1,18 @@
 import { useQueryClient } from '@tanstack/react-query';
 import { useEffect, useState } from 'react';
+import type { SettingsPatch } from '../../shared/types';
 import { errorMessage, initToken, onUnauthorized, setToken } from './api';
 import { LabelTag, Notice, StatusBadge, statusDetail } from './components';
-import { EMPTY_SETTINGS, REGIONS, useAppState, useInfo, useProfiles, useSaveSettings, useStatus } from './hooks';
+import { EMPTY_SETTINGS, REGIONS, roleAccount, roleName, useAppState, useInfo, useProfiles, useSaveSettings, useStatus } from './hooks';
 import { ProfilesPage } from './pages/Profiles';
 import { ResourcesPage } from './pages/Resources';
+import { RolesPage } from './pages/Roles';
 import { RunnerPage } from './pages/Runner';
 
-type Page = 'profiles' | 'runner' | 'resources';
+type Page = 'profiles' | 'roles' | 'runner' | 'resources';
 const PAGES: { id: Page; label: string }[] = [
   { id: 'profiles', label: 'Profiles' },
+  { id: 'roles', label: 'IAM roles' },
   { id: 'runner', label: 'Command runner' },
   { id: 'resources', label: 'Resources' },
 ];
@@ -88,14 +91,20 @@ function Dashboard() {
   const settings = stateQuery.data?.settings ?? EMPTY_SETTINGS;
   const active =
     profiles.find((p) => p.name === settings.activeProfile) ?? profiles.find((p) => p.name === 'default') ?? profiles[0];
-  const status = useStatus(active?.name);
+  // A role belongs to the profile it was switched to from; with another profile active it does not apply.
+  const role = active && settings.activeRole?.profile === active.name ? settings.activeRole.arn : undefined;
+  const status = useStatus(active?.name, true, role);
   const label = active ? settings.labels[active.name] : undefined;
-  const accountId = active?.accountId ?? status.data?.accountId;
+  const accountId = role ? roleAccount(role) : (active?.accountId ?? status.data?.accountId);
+  const allowChanges = info.data?.allowChanges ?? false;
   const regionChoices = settings.region && !REGIONS.includes(settings.region) ? [settings.region, ...REGIONS] : REGIONS;
   const pinned = new Set(settings.pins);
   const ordered = [...profiles].sort((a, b) => Number(pinned.has(b.name)) - Number(pinned.has(a.name)));
 
   const loadError = profilesQuery.error ?? stateQuery.error;
+  const save = (patch: SettingsPatch) => saveSettings.mutate(patch);
+  /** Changing profile also leaves any role, which was switched to from the previous profile. */
+  const selectProfile = (name: string) => save({ activeProfile: name, activeRole: null });
 
   return (
     <div className="app">
@@ -109,13 +118,18 @@ function Dashboard() {
           ))}
         </nav>
         <div className="context">
+          {info.data && !allowChanges && (
+            <span className="badge muted" title="The command runner refuses commands that may change or delete resources.">
+              Read-only
+            </span>
+          )}
           <label className="field">
             <span>Profile</span>
             <select
               className="input"
               value={active?.name ?? ''}
               disabled={profiles.length === 0}
-              onChange={(e) => saveSettings.mutate({ activeProfile: e.target.value })}
+              onChange={(e) => selectProfile(e.target.value)}
             >
               {ordered.map((p) => (
                 <option key={p.name} value={p.name}>
@@ -127,11 +141,7 @@ function Dashboard() {
           </label>
           <label className="field">
             <span>Region</span>
-            <select
-              className="input"
-              value={settings.region ?? ''}
-              onChange={(e) => saveSettings.mutate({ region: e.target.value })}
-            >
+            <select className="input" value={settings.region ?? ''} onChange={(e) => save({ region: e.target.value })}>
               <option value="">Profile default{active?.region ? ` (${active.region})` : ''}</option>
               {regionChoices.map((r) => (
                 <option key={r} value={r}>
@@ -149,17 +159,28 @@ function Dashboard() {
           <LabelTag label={label} />
           <span>
             Active profile <strong>{active.name}</strong>
+            {role && (
+              <>
+                {' '}
+                · role <strong>{roleName(role)}</strong>
+              </>
+            )}
             {accountId && (
               <>
                 {' '}
                 · account <strong>{accountId}</strong>
               </>
             )}
-            {active.roleName && <> · {active.roleName}</>} · region{' '}
+            {!role && active.roleName && <> · {active.roleName}</>} · region{' '}
             <strong>{settings.region ?? active.region ?? 'not set'}</strong>
           </span>
           {status.data && statusDetail(status.data) && status.data.state === 'valid' && (
             <span className="faint">{statusDetail(status.data)}</span>
+          )}
+          {role && (
+            <button className="btn small" type="button" onClick={() => save({ activeRole: null })}>
+              Leave role
+            </button>
           )}
         </div>
       )}
@@ -172,6 +193,12 @@ function Dashboard() {
         )}
         {loadError && <Notice tone="error">Could not load the dashboard data: {errorMessage(loadError)}</Notice>}
         {saveSettings.error && <Notice tone="error">Could not save the setting: {errorMessage(saveSettings.error)}</Notice>}
+        {role && status.data && status.data.state !== 'valid' && (
+          <Notice tone="warn">
+            The role {roleName(role)} cannot be used right now, so commands and lists will fail. {status.data.message} Leave
+            the role, or sign in again on the Profiles page if the session of the profile has expired.
+          </Notice>
+        )}
 
         {profilesQuery.isPending || stateQuery.isPending ? (
           <p className="faint">Loading profiles…</p>
@@ -184,25 +211,30 @@ function Dashboard() {
         ) : (
           <>
             {page === 'profiles' && (
-              <ProfilesPage
-                profiles={profiles}
-                settings={settings}
-                active={active}
-                onUse={(name) => saveSettings.mutate({ activeProfile: name })}
-                onSettings={(patch) => saveSettings.mutate(patch)}
-              />
+              <ProfilesPage profiles={profiles} settings={settings} active={active} onUse={selectProfile} onSettings={save} />
             )}
+            {page === 'roles' && <RolesPage active={active} role={role} settings={settings} onSettings={save} />}
             {/* The runner stays mounted so a running command and its output survive a page switch. */}
             <div hidden={page !== 'runner'}>
               <RunnerPage
                 active={active}
+                role={role}
                 region={settings.region}
                 label={label}
                 accountId={accountId}
+                allowChanges={allowChanges}
                 appState={stateQuery.data}
               />
             </div>
-            {page === 'resources' && <ResourcesPage active={active} region={settings.region} />}
+            {page === 'resources' && (
+              <ResourcesPage
+                active={active}
+                role={role}
+                region={settings.region}
+                allRegions={settings.allRegions === true}
+                onSettings={save}
+              />
+            )}
           </>
         )}
       </main>

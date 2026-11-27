@@ -3,21 +3,30 @@ import { useMemo, useRef, useState } from 'react';
 import type { AppState, CommandCheck, Favourite, Profile, ProfileLabel, ResourceColumn, StreamEvent } from '../../../shared/types';
 import { api, errorMessage, streamApi } from '../api';
 import { DataTable, JsonTree, LabelTag, Notice, timeAgo } from '../components';
+import { roleName } from '../hooks';
 
 interface Props {
   active?: Profile;
+  /** ARN of the role in use, if any. */
+  role?: string;
   /** Region override from the header; undefined means the region of the profile. */
   region?: string;
   label?: ProfileLabel;
   accountId?: string;
+  /** False in read-only mode: commands that may change resources are refused. */
+  allowChanges: boolean;
   appState?: AppState;
 }
+
+const READ_ONLY_TEXT =
+  'Read-only mode: this command may change or delete resources, so it was not run. Only commands that read (describe, list, get and similar) are allowed.';
 
 type EndEvent = Extract<StreamEvent, { t: 'end' }>;
 type View = 'table' | 'tree' | 'raw';
 
 interface RunInfo {
   profile: string;
+  role?: string;
   region?: string;
   args?: string[];
   end?: EndEvent;
@@ -46,7 +55,7 @@ function columnsOf(rows: Record<string, unknown>[]): ResourceColumn[] {
   return [...keys].slice(0, 30).map((key) => ({ key, label: key }));
 }
 
-export function RunnerPage({ active, region, label, accountId, appState }: Props) {
+export function RunnerPage({ active, role, region, label, accountId, allowChanges, appState }: Props) {
   const queryClient = useQueryClient();
   const [command, setCommand] = useState('sts get-caller-identity');
   const [running, setRunning] = useState(false);
@@ -83,6 +92,7 @@ export function RunnerPage({ active, region, label, accountId, appState }: Props
       try {
         const check = await api<CommandCheck>('/api/run/check', { method: 'POST', body: { command } });
         if (check.blocked) return setNotice(check.blocked);
+        if (!check.readOnly && !allowChanges) return setNotice(READ_ONLY_TEXT);
         if (!check.readOnly) return setPending(check);
       } catch (error) {
         return setNotice(errorMessage(error));
@@ -91,14 +101,14 @@ export function RunnerPage({ active, region, label, accountId, appState }: Props
     setPending(null);
     setOut('');
     setErr('');
-    setRun({ profile: active.name, region });
+    setRun({ profile: active.name, role, region });
     setRunning(true);
     const abort = new AbortController();
     abortRef.current = abort;
     try {
       await streamApi(
         '/api/run',
-        { profile: active.name, region, command, confirmed },
+        { profile: active.name, role, region, command, confirmed },
         (event) => {
           if (event.t === 'start') setRun((current) => current && { ...current, args: event.args });
           else if (event.t === 'out') setOut((current) => current + event.d);
@@ -177,7 +187,14 @@ export function RunnerPage({ active, region, label, accountId, appState }: Props
             )}
             <span className="faint">
               Runs as <strong>{active?.name ?? 'no profile'}</strong>
+              {role && (
+                <>
+                  {' '}
+                  · role <strong>{roleName(role)}</strong>
+                </>
+              )}
               {accountId && <> · account {accountId}</>} · region {effectiveRegion}
+              {!allowChanges && <> · read-only</>}
             </span>
             <LabelTag label={label} />
             <span className="spacer" />
@@ -223,6 +240,12 @@ export function RunnerPage({ active, region, label, accountId, appState }: Props
             <pre className="output small">aws {pending.args.join(' ')}</pre>
             <p>
               It will run with profile <strong>{active.name}</strong>
+              {role && (
+                <>
+                  {' '}
+                  as role <strong>{roleName(role)}</strong>
+                </>
+              )}
               {accountId && (
                 <>
                   {' '}
@@ -249,6 +272,7 @@ export function RunnerPage({ active, region, label, accountId, appState }: Props
                 <code>aws {run.args?.join(' ') ?? '…'}</code>
                 <div className="faint">
                   profile {run.profile}
+                  {run.role && <> · role {roleName(run.role)}</>}
                   {run.region && <> · region {run.region}</>}
                   {end && (
                     <>
@@ -341,7 +365,8 @@ export function RunnerPage({ active, region, label, accountId, appState }: Props
                 <button type="button" className="list-item" title={entry.command} onClick={() => setCommand(entry.command)}>
                   <span className="mono clip">{entry.command}</span>
                   <span className="faint">
-                    {entry.profile} · {timeAgo(entry.at)} · {entry.exitCode === 0 ? 'ok' : `exit ${entry.exitCode ?? 'none'}`}
+                    {entry.profile}
+                    {entry.role && <> as {roleName(entry.role)}</>} · {timeAgo(entry.at)} · {entry.exitCode === 0 ? 'ok' : `exit ${entry.exitCode ?? 'none'}`}
                   </span>
                 </button>
               </li>

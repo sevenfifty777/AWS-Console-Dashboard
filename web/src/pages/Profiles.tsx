@@ -1,6 +1,6 @@
 import { useQueryClient } from '@tanstack/react-query';
 import { useMemo, useRef, useState } from 'react';
-import type { Profile, SessionStatus, Settings } from '../../../shared/types';
+import type { Profile, SessionStatus, Settings, SettingsPatch } from '../../../shared/types';
 import { api, errorMessage, streamApi } from '../api';
 import { LabelTag, Notice, StatusBadge, countOf, statusDetail } from '../components';
 import { LABEL_PRESETS, TYPE_LABEL, recheckStatus, useStatus } from '../hooks';
@@ -10,7 +10,7 @@ interface Props {
   settings: Settings;
   active?: Profile;
   onUse: (name: string) => void;
-  onSettings: (patch: Partial<Settings>) => void;
+  onSettings: (patch: SettingsPatch) => void;
 }
 
 /** Output of the sign-in or sign-out command that was last started. */

@@ -481,6 +481,25 @@ button:focus-visible {
   font-size: 13px;
 }
 
+.chips {
+  margin-top: 10px;
+}
+
+.region-note {
+  margin: 4px 0 10px;
+}
+
+.region-note summary {
+  cursor: pointer;
+  color: var(--warn);
+}
+
+.region-note ul {
+  margin: 6px 0 0;
+  padding-left: 20px;
+  overflow-wrap: anywhere;
+}
+
 /* --- tables --------------------------------------------------------------------------- */
 
 .table-tools {
@@ -505,6 +524,12 @@ button:focus-visible {
   padding: 7px 10px;
   border-bottom: 1px solid var(--border);
   vertical-align: top;
+}
+
+/* Cells may hold several values, one per line (DNS records), and long unbroken text. */
+.grid td {
+  white-space: pre-line;
+  overflow-wrap: anywhere;
 }
 
 .grid th {

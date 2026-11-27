@@ -118,6 +118,17 @@ describe('running the CLI', () => {
     expect(env.aws_secret_access_key).toBeUndefined();
   });
 
+  it('passes the keys of an assumed role, keeping the profile for its settings', () => {
+    const role = { accessKeyId: 'role-key', secretAccessKey: 'role-secret', sessionToken: 'role-token' };
+    const env = childEnv({ AWS_ACCESS_KEY_ID: 'leak', AWS_SESSION_TOKEN: 'leak' }, 'dev', undefined, role);
+    expect(env).toMatchObject({
+      AWS_PROFILE: 'dev',
+      AWS_ACCESS_KEY_ID: 'role-key',
+      AWS_SECRET_ACCESS_KEY: 'role-secret',
+      AWS_SESSION_TOKEN: 'role-token',
+    });
+  });
+
   it('runs the executable with the chosen profile', async () => {
     const result = await runAws(cli, ['print-env'], { profile: 'dev-admin', region: 'eu-central-1' });
     expect(result.code).toBe(0);

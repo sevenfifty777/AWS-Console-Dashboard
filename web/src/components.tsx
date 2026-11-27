@@ -103,7 +103,8 @@ function Cell({ column, value }: { column: string; value: unknown }) {
     return <span className={`badge ${stateTone(value)}`}>{value}</span>;
   }
   if (typeof value === 'string' && ISO_DATE.test(value)) return <span title={value}>{formatDate(value)}</span>;
-  return <>{text.length > 200 ? `${text.slice(0, 200)}…` : text}</>;
+  // Long values (a DKIM key, for example) are shortened; the full text shows on hover.
+  return text.length > 300 ? <span title={text}>{text.slice(0, 300)}…</span> : <>{text}</>;
 }
 
 function compare(a: unknown, b: unknown): number {
@@ -111,8 +112,17 @@ function compare(a: unknown, b: unknown): number {
   return cellText(a).localeCompare(cellText(b), undefined, { numeric: true, sensitivity: 'base' });
 }
 
+interface DataTableProps {
+  columns: ResourceColumn[];
+  rows: Record<string, unknown>[];
+  /** Adds a button at the end of every row. */
+  rowAction?: { label: string; disabled?: boolean; onRow: (row: Record<string, unknown>) => void };
+  /** Hint shown in the filter box. */
+  filterPlaceholder?: string;
+}
+
 /** Sortable, filterable table for a list of flat objects. */
-export function DataTable({ columns, rows }: { columns: ResourceColumn[]; rows: Record<string, unknown>[] }) {
+export function DataTable({ columns, rows, rowAction, filterPlaceholder = 'Filter rows' }: DataTableProps) {
   const [sort, setSort] = useState<{ key: string; dir: 1 | -1 } | null>(null);
   const [filter, setFilter] = useState('');
 
@@ -134,8 +144,8 @@ export function DataTable({ columns, rows }: { columns: ResourceColumn[]; rows: 
         <input
           className="input"
           type="search"
-          placeholder="Filter rows"
-          aria-label="Filter rows"
+          placeholder={filterPlaceholder}
+          aria-label={filterPlaceholder}
           value={filter}
           onChange={(e) => setFilter(e.target.value)}
         />
@@ -155,6 +165,7 @@ export function DataTable({ columns, rows }: { columns: ResourceColumn[]; rows: 
                   </button>
                 </th>
               ))}
+              {rowAction && <th aria-label="Actions" />}
             </tr>
           </thead>
           <tbody>
@@ -165,6 +176,13 @@ export function DataTable({ columns, rows }: { columns: ResourceColumn[]; rows: 
                     <Cell column={c.key} value={row[c.key]} />
                   </td>
                 ))}
+                {rowAction && (
+                  <td className="actions">
+                    <button className="btn small" type="button" disabled={rowAction.disabled} onClick={() => rowAction.onRow(row)}>
+                      {rowAction.label}
+                    </button>
+                  </td>
+                )}
               </tr>
             ))}
           </tbody>

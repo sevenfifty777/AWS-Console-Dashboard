@@ -41,10 +41,12 @@ function openInBrowser(url: string): void {
 
 async function main(): Promise<void> {
   if (hasFlag('--help') || hasFlag('-h')) {
-    console.log('Usage: node aws-dashboard.mjs [--port <number>] [--no-open]');
+    console.log('Usage: node aws-dashboard.mjs [--port <number>] [--no-open] [--allow-changes]');
+    console.log('  --allow-changes  let the command runner run commands that change resources (it asks first)');
     return;
   }
   const dev = hasFlag('--dev');
+  const allowChanges = hasFlag('--allow-changes');
   const fixedPort = optionValue('--port') ?? process.env.AWS_DASHBOARD_PORT;
   let port = Number(fixedPort ?? DEFAULT_PORT);
   if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error(`"${fixedPort}" is not a port number`);
@@ -67,6 +69,7 @@ async function main(): Promise<void> {
     port,
     extraOrigins: dev ? DEV_ORIGINS : [],
     publicDir,
+    allowChanges,
   };
   if (cli) {
     void runAws(cli, ['--version'], { timeoutMs: 15_000 }).then((result) => {
@@ -83,6 +86,11 @@ async function main(): Promise<void> {
   console.log('AWS Console Dashboard');
   console.log(`  Open:     ${url}`);
   console.log(`  AWS CLI:  ${cli ? cli.display : 'not found - install the AWS CLI and restart'}`);
+  console.log(
+    allowChanges
+      ? '  Mode:     changes allowed - the command runner asks before a command that may change resources'
+      : '  Mode:     read-only - the command runner refuses commands that may change resources',
+  );
   if (!publicDir && !dev) console.log('  The browser app is not built yet. Run: npm run build');
   console.log('  The link holds a one-time access token for this run. Stop with Ctrl+C.');
   console.log('');

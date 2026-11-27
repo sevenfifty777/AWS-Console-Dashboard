@@ -47,16 +47,34 @@ export interface ProfileLabel {
   text?: string;
 }
 
+/** An IAM role switched to from a profile. */
+export interface ActiveRole {
+  /** The profile the role is assumed from. */
+  profile: string;
+  arn: string;
+}
+
 export interface Settings {
   activeProfile?: string;
   /** Region override. Empty means "use the region of the profile". */
   region?: string;
   pins: string[];
   labels: Record<string, ProfileLabel>;
+  /** Resource lists cover every enabled region instead of one. */
+  allRegions?: boolean;
+  /** The role in use. It only applies while its profile is the active one. */
+  activeRole?: ActiveRole;
+  /** Roles switched to lately, newest first. */
+  recentRoles?: ActiveRole[];
 }
+
+/** A settings change. null clears the role in use. */
+export type SettingsPatch = Partial<Omit<Settings, 'activeRole'>> & { activeRole?: ActiveRole | null };
 
 export interface HistoryEntry {
   profile: string;
+  /** ARN of the role the command ran as, when one was in use. */
+  role?: string;
   region?: string;
   command: string;
   at: string;
@@ -80,6 +98,8 @@ export interface AppInfo {
   configFile: string;
   credentialsFile: string;
   dataDir: string;
+  /** False in read-only mode: the command runner refuses commands that may change resources. */
+  allowChanges: boolean;
 }
 
 export interface ProfilesResponse {
@@ -113,13 +133,46 @@ export interface ResourceInfo {
   /** True when the service lists the same items whatever the region. */
   global: boolean;
   columns: ResourceColumn[];
+  /** Set on a view that is opened from a row of another view (its id) instead of from the tab bar. */
+  parent?: string;
+  /** True for a view that another page shows, so it is left out of the Resources tab bar. */
+  hidden?: boolean;
+  /** Present when each row of this view can open another view. */
+  drill?: ResourceDrill;
+}
+
+export interface ResourceDrill {
+  /** id of the view to open. */
+  view: string;
+  /** Row key whose value is passed to that view. */
+  paramKey: string;
+  /** Row key shown as the heading of the opened view. */
+  titleKey: string;
+  /** Text of the button on each row. */
+  label: string;
+}
+
+export interface RegionFailure {
+  region: string;
+  state: SessionState;
+  message: string;
 }
 
 export interface ResourceResult {
   rows: Record<string, unknown>[];
   error?: { state: SessionState; message: string };
   fetchedAt: string;
+  /** Present when the list was run in every region. Each row then has a "region" value. */
+  regions?: {
+    checked: number;
+    /** True when the account's own region list could not be read and the usual regions were tried. */
+    standardList: boolean;
+    failed: RegionFailure[];
+  };
 }
 
 /** AWS region names such as eu-west-1, us-gov-west-1, ap-southeast-2. */
 export const REGION_PATTERN = /^[a-z]{2}(-[a-z]+)+-\d{1,2}$/;
+
+/** The ARN of an IAM role, for example arn:aws:iam::123456789012:role/path/Name. */
+export const ROLE_ARN_PATTERN = /^arn:aws[a-z-]*:iam::\d{12}:role\/[\w+=,.@/-]{1,576}$/;
