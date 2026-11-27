@@ -98,12 +98,23 @@ export function ProfilesPage({ profiles, settings, active, onUse, onSettings }: 
     }
   };
 
+  // SSO is one sign-in per session, shared by all its profiles, and "aws sso logout"
+  // can only end every session at once. The texts below say which of the two applies.
+  const ssoProfiles = profiles.filter((p) => p.loginKind === 'sso');
+  const ssoSessionCount = new Set(ssoProfiles.map((p) => p.authGroup)).size;
+
   const signOut = async (profile: Profile) => {
-    if (
-      profile.loginKind === 'sso' &&
-      !window.confirm('Signing out ends every SSO session on this computer, not only this one. Continue?')
-    ) {
-      return;
+    if (profile.loginKind === 'sso') {
+      const session = profile.ssoSession ? `SSO session "${profile.ssoSession}"` : 'this SSO sign-in';
+      const sharedBy = ssoProfiles.filter((p) => p.authGroup === profile.authGroup).length;
+      const message =
+        ssoSessionCount > 1
+          ? `The AWS CLI can only sign out of all SSO sessions together, not of ${session} alone.\n\n` +
+            `All ${ssoSessionCount} SSO sessions on this computer will be signed out (${countOf(ssoProfiles.length, 'profile')}). Continue?`
+          : `Sign out of ${session}?\n\n` +
+            `It is one sign-in shared by ${countOf(sharedBy, 'profile')}, so they are all signed out together. ` +
+            'With SSO, a single account cannot be signed out on its own.';
+      if (!window.confirm(message)) return;
     }
     setJob({ title: `Signing out: ${profile.authProfile}`, output: '', running: true });
     try {
@@ -187,6 +198,7 @@ export function ProfilesPage({ profiles, settings, active, onUse, onSettings }: 
           members={members}
           settings={settings}
           activeName={active?.name}
+          severalSsoSessions={ssoSessionCount > 1}
           busy={job?.running ?? false}
           onUse={onUse}
           onPin={togglePin}
@@ -203,6 +215,8 @@ interface GroupProps {
   members: Profile[];
   settings: Settings;
   activeName?: string;
+  /** More than one SSO session is set up, so signing out of SSO ends them all. */
+  severalSsoSessions: boolean;
   busy: boolean;
   onUse: (name: string) => void;
   onPin: (name: string) => void;
@@ -211,7 +225,7 @@ interface GroupProps {
   onSignOut: (profile: Profile) => void;
 }
 
-function GroupCard({ members, settings, activeName, busy, onUse, onPin, onLabel, onSignIn, onSignOut }: GroupProps) {
+function GroupCard({ members, settings, activeName, severalSsoSessions, busy, onUse, onPin, onLabel, onSignIn, onSignOut }: GroupProps) {
   const first = members[0];
   const shared = first.loginKind !== 'none';
   // One check tells whether the shared sign-in is still good; the active profile is preferred for it.
@@ -227,9 +241,10 @@ function GroupCard({ members, settings, activeName, busy, onUse, onPin, onLabel,
       : first.loginKind === 'login'
         ? 'AWS login'
         : 'Profiles without a sign-in step';
+  const signOutAllSso = first.loginKind === 'sso' && severalSsoSessions;
   const detail =
     first.loginKind === 'sso'
-      ? first.ssoStartUrl
+      ? `${first.ssoStartUrl ? `${first.ssoStartUrl} · ` : ''}one sign-in shared by all the profiles below`
       : first.loginKind === 'login'
         ? first.loginSession
         : 'Access keys, external credential processes and similar. Nothing to sign in to.';
@@ -257,8 +272,20 @@ function GroupCard({ members, settings, activeName, busy, onUse, onPin, onLabel,
             <button className="btn primary" type="button" disabled={busy} onClick={() => onSignIn(first, useDeviceCode)}>
               Sign in
             </button>
-            <button className="btn" type="button" disabled={busy} onClick={() => onSignOut(first)}>
-              Sign out
+            <button
+              className="btn"
+              type="button"
+              disabled={busy}
+              title={
+                first.loginKind === 'sso'
+                  ? signOutAllSso
+                    ? 'The AWS CLI can only sign out of all SSO sessions together.'
+                    : 'Signs out every profile of this SSO session: they share one sign-in.'
+                  : undefined
+              }
+              onClick={() => onSignOut(first)}
+            >
+              {signOutAllSso ? 'Sign out of all SSO' : 'Sign out'}
             </button>
           </>
         )}

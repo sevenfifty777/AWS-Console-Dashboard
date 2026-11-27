@@ -59,6 +59,10 @@ session status.
 
 - Profiles that share an SSO session are grouped. **Sign in** runs `aws sso login` once
   for the group; the CLI opens your browser as usual.
+- **Sign out** of an SSO group signs out all its profiles together: SSO is one sign-in for
+  every account in the session, so a single account cannot be signed out on its own. With
+  more than one SSO session set up, the button reads **Sign out of all SSO**, because
+  `aws sso logout` can only end all sessions at once.
 - `aws login` profiles sign in with `aws login --profile <name>`.
 - Assume-role profiles follow the profile they get their credentials from.
 - **Use** makes a profile the active one for the other two pages. This is a dashboard
@@ -177,7 +181,5 @@ shared/types.ts    data shapes used by both sides
 
 ## Known limits
 
-- The SSO sign-in path has been tested against sample config files and a stand-in CLI,
-  not yet against a real IAM Identity Center setup.
 - Signing out of SSO ends every SSO session on the computer; that is how `aws sso logout` works.
 - Profiles cannot be created or edited from the dashboard yet. Use the AWS CLI for that.
