@@ -1,0 +1,33 @@
+{
+  "name": "aws-console-dashboard",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Local dashboard for AWS CLI profiles: sign in, switch, run commands and browse resources.",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "dev:server": "tsx watch server/src/index.ts --dev",
+    "dev:web": "vite",
+    "build": "node scripts/build.mjs",
+    "start": "node dist/aws-dashboard.mjs",
+    "typecheck": "tsc -p tsconfig.json && tsc -p web/tsconfig.json",
+    "test": "vitest run"
+  },
+  "devDependencies": {
+    "@tanstack/react-query": "^5.108.4",
+    "@types/node": "^26.6.11",
+    "@types/react": "^19.3.3",
+    "@types/react-dom": "^19.3.0",
+    "@vitejs/plugin-react": "^6.3.0",
+    "esbuild": "^0.28.2",
+    "fastify": "^5.12.8",
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1",
+    "tsx": "^4.23.15",
+    "typescript": "^7.0.2",
+    "vite": "^8.4.0",
+    "vitest": "^5.1.2"
+  }
+}
