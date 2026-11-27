@@ -154,6 +154,10 @@ npm run dev:web        terminal 2: the browser app on port 5173; reloads when it
 Then open the link printed by `dev:server` (it points at port 5173 and carries the token).
 Without this pair, run `npm run build` and `npm start` again after each change.
 
+After `npm run build`, restart a dashboard that is already running (Ctrl+C, then `npm start`).
+Otherwise the browser shows the new page while the old server is still answering, and new
+features fail with a message asking you to restart.
+
 **Checks.** These run once and finish by themselves, in any terminal, with no server running:
 
 ```

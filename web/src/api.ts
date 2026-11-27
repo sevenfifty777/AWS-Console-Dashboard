@@ -53,8 +53,17 @@ async function toError(res: Response): Promise<ApiError> {
     token = '';
     unauthorizedListener?.();
   }
-  const message = (body as { error?: string } | null)?.error ?? `The request failed (${res.status})`;
-  return new ApiError(res.status, message, body);
+  const answer = body as { error?: string; message?: string } | null;
+  // The server answers this way for an address it does not know at all. The page only calls
+  // addresses that exist, so the server must be an older one, still running from before an update.
+  if (res.status === 404 && answer?.message?.startsWith('Route ')) {
+    return new ApiError(
+      404,
+      'The running dashboard is older than this page and does not know this feature yet. Stop it (Ctrl+C in its terminal), start it again with "npm start", and open the new link.',
+      body,
+    );
+  }
+  return new ApiError(res.status, answer?.error ?? `The request failed (${res.status})`, body);
 }
 
 function request(path: string, method: string, body: unknown, signal?: AbortSignal): Promise<Response> {
