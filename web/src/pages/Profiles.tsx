@@ -1,6 +1,14 @@
 import { useQueryClient } from '@tanstack/react-query';
 import { useMemo, useRef, useState } from 'react';
-import type { Profile, SessionStatus, Settings, SettingsPatch } from '../../../shared/types';
+import {
+  LABEL_COLORS,
+  type LabelColor,
+  type Profile,
+  type ProfileLabel,
+  type SessionStatus,
+  type Settings,
+  type SettingsPatch,
+} from '../../../shared/types';
 import { api, errorMessage, streamApi } from '../api';
 import { LabelTag, Notice, StatusBadge, countOf, statusDetail } from '../components';
 import { LABEL_PRESETS, TYPE_LABEL, recheckStatus, useStatus } from '../hooks';
@@ -116,10 +124,9 @@ export function ProfilesPage({ profiles, settings, active, onUse, onSettings }: 
   const togglePin = (name: string) =>
     onSettings({ pins: settings.pins.includes(name) ? settings.pins.filter((p) => p !== name) : [...settings.pins, name] });
 
-  const setLabel = (name: string, color: string) => {
+  const setLabel = (name: string, label: ProfileLabel | undefined) => {
     const labels = { ...settings.labels };
-    const preset = LABEL_PRESETS.find((l) => l.color === color);
-    if (preset) labels[name] = preset;
+    if (label) labels[name] = label;
     else delete labels[name];
     onSettings({ labels });
   };
@@ -199,7 +206,7 @@ interface GroupProps {
   busy: boolean;
   onUse: (name: string) => void;
   onPin: (name: string) => void;
-  onLabel: (name: string, color: string) => void;
+  onLabel: (name: string, label: ProfileLabel | undefined) => void;
   onSignIn: (profile: Profile, useDeviceCode: boolean) => void;
   onSignOut: (profile: Profile) => void;
 }
@@ -281,7 +288,6 @@ function GroupCard({ members, settings, activeName, busy, onUse, onPin, onLabel,
                 profile={profile}
                 isActive={profile.name === activeName}
                 pinned={settings.pins.includes(profile.name)}
-                labelColor={settings.labels[profile.name]?.color ?? ''}
                 checkNow={!shared || profile.name === representative.name}
                 groupStatus={shared ? groupStatus.data : undefined}
                 onUse={onUse}
@@ -302,16 +308,98 @@ interface RowProps {
   settings: Settings;
   isActive: boolean;
   pinned: boolean;
-  labelColor: string;
   /** Check this profile straight away instead of waiting for the user to ask. */
   checkNow: boolean;
   groupStatus?: SessionStatus;
   onUse: (name: string) => void;
   onPin: (name: string) => void;
-  onLabel: (name: string, color: string) => void;
+  onLabel: (name: string, label: ProfileLabel | undefined) => void;
 }
 
-function ProfileRow({ profile, settings, isActive, pinned, labelColor, checkNow, groupStatus, onUse, onPin, onLabel }: RowProps) {
+const COLOR_NAMES: Record<LabelColor, string> = { red: 'Red', amber: 'Amber', green: 'Green', blue: 'Blue', purple: 'Purple' };
+const MAX_LABEL_LENGTH = 24;
+
+/**
+ * Picks the label of a profile: none, a ready-made one, or a name typed by the user
+ * with a colour of their choice.
+ */
+function LabelEditor({ profileName, label, onChange }: { profileName: string; label?: ProfileLabel; onChange: (label: ProfileLabel | undefined) => void }) {
+  const preset = label ? LABEL_PRESETS.find((p) => p.color === label.color && p.text === label.text) : undefined;
+  const [custom, setCustom] = useState(label !== undefined && !preset);
+  const [text, setText] = useState(label?.text ?? '');
+  const [color, setColor] = useState<LabelColor>(label?.color ?? 'blue');
+
+  /** Saves the typed name, unless it is empty or nothing changed. Choose "None" to remove a label. */
+  const saveCustom = (nextText: string, nextColor: LabelColor) => {
+    const name = nextText.trim();
+    if (name && (name !== label?.text || nextColor !== label.color)) onChange({ color: nextColor, text: name });
+  };
+
+  return (
+    <div className="label-editor">
+      <select
+        className="input small"
+        aria-label={`Label for ${profileName}`}
+        value={custom ? 'custom' : (preset?.color ?? '')}
+        onChange={(e) => {
+          if (e.target.value === 'custom') {
+            setCustom(true);
+            setText(preset ? '' : (label?.text ?? ''));
+            setColor(label?.color ?? 'blue');
+            return;
+          }
+          setCustom(false);
+          onChange(LABEL_PRESETS.find((p) => p.color === e.target.value));
+        }}
+      >
+        <option value="">None</option>
+        {LABEL_PRESETS.map((p) => (
+          <option key={p.color} value={p.color}>
+            {p.text}
+          </option>
+        ))}
+        <option value="custom">Custom name…</option>
+      </select>
+      {custom && (
+        <form
+          className="row"
+          onSubmit={(e) => {
+            e.preventDefault();
+            saveCustom(text, color);
+          }}
+        >
+          <input
+            className="input small"
+            aria-label={`Custom label name for ${profileName}`}
+            placeholder="Name, then Enter"
+            maxLength={MAX_LABEL_LENGTH}
+            value={text}
+            onChange={(e) => setText(e.target.value)}
+            onBlur={() => saveCustom(text, color)}
+          />
+          <select
+            className="input small"
+            aria-label={`Label colour for ${profileName}`}
+            value={color}
+            onChange={(e) => {
+              const next = e.target.value as LabelColor;
+              setColor(next);
+              saveCustom(text, next);
+            }}
+          >
+            {LABEL_COLORS.map((c) => (
+              <option key={c} value={c}>
+                {COLOR_NAMES[c]}
+              </option>
+            ))}
+          </select>
+        </form>
+      )}
+    </div>
+  );
+}
+
+function ProfileRow({ profile, settings, isActive, pinned, checkNow, groupStatus, onUse, onPin, onLabel }: RowProps) {
   const queryClient = useQueryClient();
   const [asked, setAsked] = useState(false);
   const [checking, setChecking] = useState(false);
@@ -386,19 +474,11 @@ function ProfileRow({ profile, settings, isActive, pinned, labelColor, checkNow,
       <td>{profile.region ?? <span className="faint">not set</span>}</td>
       <td>{statusCell}</td>
       <td>
-        <select
-          className="input small"
-          aria-label={`Label for ${profile.name}`}
-          value={labelColor}
-          onChange={(e) => onLabel(profile.name, e.target.value)}
-        >
-          <option value="">None</option>
-          {LABEL_PRESETS.map((preset) => (
-            <option key={preset.color} value={preset.color}>
-              {preset.text}
-            </option>
-          ))}
-        </select>
+        <LabelEditor
+          profileName={profile.name}
+          label={settings.labels[profile.name]}
+          onChange={(label) => onLabel(profile.name, label)}
+        />
       </td>
       <td className="actions">
         <button className="btn small" type="button" disabled={isActive} onClick={() => onUse(profile.name)}>

@@ -1,7 +1,7 @@
 import { useQueryClient } from '@tanstack/react-query';
-import { useEffect, useState } from 'react';
-import type { SettingsPatch } from '../../shared/types';
-import { errorMessage, initToken, onUnauthorized, setToken } from './api';
+import { useEffect, useRef, useState } from 'react';
+import type { AppInfo, SettingsPatch } from '../../shared/types';
+import { api, errorMessage, initToken, onUnauthorized, setToken } from './api';
 import { LabelTag, Notice, StatusBadge, statusDetail } from './components';
 import { EMPTY_SETTINGS, REGIONS, roleAccount, roleName, useAppState, useInfo, useProfiles, useSaveSettings, useStatus } from './hooks';
 import { ProfilesPage } from './pages/Profiles';
@@ -74,6 +74,104 @@ function TokenGate({ onToken }: { onToken: (value: string) => void }) {
   );
 }
 
+/**
+ * The Read-only / Write switch. Going to Write opens a popup that explains the risk and
+ * needs a ticked acknowledgement; going back to Read-only is immediate.
+ */
+function ModeSwitch({ allowChanges, target }: { allowChanges: boolean; target: string }) {
+  const queryClient = useQueryClient();
+  const dialogRef = useRef<HTMLDialogElement>(null);
+  const [accepted, setAccepted] = useState(false);
+  const [problem, setProblem] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  const setMode = async (allow: boolean) => {
+    setProblem(null);
+    setBusy(true);
+    try {
+      const result = await api<{ allowChanges: boolean }>('/api/mode', {
+        method: 'PUT',
+        body: { allowChanges: allow, acknowledged: allow && accepted },
+      });
+      queryClient.setQueryData<AppInfo>(['info'], (old) => (old ? { ...old, allowChanges: result.allowChanges } : old));
+      dialogRef.current?.close();
+    } catch (err) {
+      setProblem(errorMessage(err));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const askForWrite = () => {
+    setAccepted(false);
+    setProblem(null);
+    dialogRef.current?.showModal();
+  };
+
+  return (
+    <>
+      <div className="segmented mode" role="group" aria-label="Mode">
+        <button
+          type="button"
+          className={allowChanges ? '' : 'active'}
+          aria-pressed={!allowChanges}
+          title="The command runner refuses commands that may change or delete resources."
+          onClick={() => {
+            if (allowChanges) void setMode(false);
+          }}
+        >
+          Read-only
+        </button>
+        <button
+          type="button"
+          className={allowChanges ? 'active danger' : ''}
+          aria-pressed={allowChanges}
+          title="Let the command runner run commands that change or delete resources."
+          onClick={() => {
+            if (!allowChanges) askForWrite();
+          }}
+        >
+          Write
+        </button>
+      </div>
+      {problem && !dialogRef.current?.open && <span className="problem">{problem}</span>}
+
+      <dialog ref={dialogRef} className="dialog" aria-labelledby="mode-title">
+        <h2 id="mode-title">Switch to write mode?</h2>
+        <p>
+          In write mode the command runner runs <strong>any</strong> AWS CLI command you type, including commands that
+          create, change or delete resources.
+        </p>
+        <ul>
+          <li>
+            A change made by a command is real and immediate. The dashboard cannot undo it, and it can break running
+            systems, lose data or cost money.
+          </li>
+          <li>
+            It applies to every profile and role you use here, production accounts included. Right now commands would
+            run as <strong>{target}</strong>.
+          </li>
+          <li>Before each such command you still get a confirmation that names the profile and account.</li>
+          <li>Write mode lasts until you switch back to Read-only or the dashboard is restarted.</li>
+        </ul>
+        <label className="check accept">
+          <input type="checkbox" checked={accepted} onChange={(e) => setAccepted(e.target.checked)} />
+          I understand the risk and accept responsibility for the commands I run.
+        </label>
+        {problem && <Notice tone="error">{problem}</Notice>}
+        <div className="row end">
+          <button className="btn" type="button" autoFocus onClick={() => dialogRef.current?.close()}>
+            Stay read-only
+          </button>
+          <button className="btn danger" type="button" disabled={!accepted || busy} onClick={() => void setMode(true)}>
+            Switch to write mode
+          </button>
+        </div>
+      </dialog>
+    </>
+  );
+}
+
 function Dashboard() {
   const info = useInfo();
   const profilesQuery = useProfiles();
@@ -101,6 +199,18 @@ function Dashboard() {
   const pinned = new Set(settings.pins);
   const ordered = [...profiles].sort((a, b) => Number(pinned.has(b.name)) - Number(pinned.has(a.name)));
 
+  /** Who commands would run as, spelled out in the write-mode popup. */
+  const target = active
+    ? [
+        `profile ${active.name}`,
+        role ? `role ${roleName(role)}` : null,
+        accountId ? `account ${accountId}` : null,
+        label?.text ? `labelled "${label.text}"` : null,
+      ]
+        .filter(Boolean)
+        .join(', ')
+    : 'no profile';
+
   const loadError = profilesQuery.error ?? stateQuery.error;
   const save = (patch: SettingsPatch) => saveSettings.mutate(patch);
   /** Changing profile also leaves any role, which was switched to from the previous profile. */
@@ -118,11 +228,7 @@ function Dashboard() {
           ))}
         </nav>
         <div className="context">
-          {info.data && !allowChanges && (
-            <span className="badge muted" title="The command runner refuses commands that may change or delete resources.">
-              Read-only
-            </span>
-          )}
+          {info.data && <ModeSwitch allowChanges={allowChanges} target={target} />}
           <label className="field">
             <span>Profile</span>
             <select
@@ -135,6 +241,7 @@ function Dashboard() {
                 <option key={p.name} value={p.name}>
                   {p.name}
                   {p.accountId ? ` — ${p.accountId}` : ''}
+                  {settings.labels[p.name]?.text ? ` (${settings.labels[p.name]?.text})` : ''}
                 </option>
               ))}
             </select>
@@ -157,6 +264,11 @@ function Dashboard() {
       {active && (
         <div className={`activebar ${label ? `label-${label.color} labelled` : ''}`}>
           <LabelTag label={label} />
+          {allowChanges && (
+            <span className="badge bad" title="The command runner can run commands that change or delete resources.">
+              Write mode
+            </span>
+          )}
           <span>
             Active profile <strong>{active.name}</strong>
             {role && (

@@ -42,7 +42,7 @@ function openInBrowser(url: string): void {
 async function main(): Promise<void> {
   if (hasFlag('--help') || hasFlag('-h')) {
     console.log('Usage: node aws-dashboard.mjs [--port <number>] [--no-open] [--allow-changes]');
-    console.log('  --allow-changes  let the command runner run commands that change resources (it asks first)');
+    console.log('  --allow-changes  start in write mode instead of read-only (the mode can also be switched in the page)');
     return;
   }
   const dev = hasFlag('--dev');
@@ -70,6 +70,14 @@ async function main(): Promise<void> {
     extraOrigins: dev ? DEV_ORIGINS : [],
     publicDir,
     allowChanges,
+    onModeChange: (allow) => {
+      const time = new Date().toLocaleTimeString();
+      console.log(
+        allow
+          ? `  [${time}] Mode switched to WRITE: the command runner can now change and delete resources`
+          : `  [${time}] Mode switched to read-only`,
+      );
+    },
   };
   if (cli) {
     void runAws(cli, ['--version'], { timeoutMs: 15_000 }).then((result) => {
@@ -88,8 +96,8 @@ async function main(): Promise<void> {
   console.log(`  AWS CLI:  ${cli ? cli.display : 'not found - install the AWS CLI and restart'}`);
   console.log(
     allowChanges
-      ? '  Mode:     changes allowed - the command runner asks before a command that may change resources'
-      : '  Mode:     read-only - the command runner refuses commands that may change resources',
+      ? '  Mode:     WRITE - the command runner asks before a command that may change resources'
+      : '  Mode:     read-only - the command runner refuses commands that may change resources (switch in the page)',
   );
   if (!publicDir && !dev) console.log('  The browser app is not built yet. Run: npm run build');
   console.log('  The link holds a one-time access token for this run. Stop with Ctrl+C.');

@@ -29,8 +29,13 @@ Options: `npm start -- --port 5000` picks the port (default 4780, or the next fr
 `npm start -- --no-open` does not open the browser.
 
 The dashboard starts in **read-only mode**: nothing in it creates, changes or deletes AWS
-resources, and the command runner refuses commands that could. `npm start -- --allow-changes`
-lets the command runner run such commands after asking for confirmation.
+resources, and the command runner refuses commands that could.
+
+To run such commands, choose **Write** in the top bar. A popup explains the risk and asks
+you to acknowledge it before the mode changes. In write mode the command runner runs any
+command, still asking for confirmation before each one that may change something. Choose
+**Read-only** to go back at any time. Write mode is not remembered: every start of the
+dashboard is read-only again, unless you start it with `npm start -- --allow-changes`.
 
 ## Run it on a PC where you cannot run `npm install`
 
@@ -58,8 +63,9 @@ session status.
 - Assume-role profiles follow the profile they get their credentials from.
 - **Use** makes a profile the active one for the other two pages. This is a dashboard
   setting only: your terminals and config files are not changed.
-- Pin profiles to the top, and give them a coloured label such as Production. The label
-  of the active profile is shown on every page.
+- Pin profiles to the top, and give them a coloured label: a ready-made one such as
+  Production, or a name you type yourself (**Custom name…**, up to 24 characters). The label
+  of the active profile is shown on every page, and in the profile list of the top bar.
 
 Status comes from `aws sts get-caller-identity`. For an SSO group one profile is checked
 automatically; press **Check** on any other profile to test that one.
@@ -85,7 +91,7 @@ profile (or the role in use) and region.
 - JSON answers are shown as a table or a collapsible tree; the raw text is always available.
   `--output json` is added unless you choose a format.
 - Commands that are not clearly read-only (anything other than `describe`, `list`, `get`,
-  `ls` and similar) are refused in read-only mode. With `--allow-changes` they ask for
+  `ls` and similar) are refused in read-only mode. In write mode they ask for
   confirmation and name the account they will run against. The check goes by the name of
   the command, so treat it as a guard against mistakes, not as a permission system: what a
   profile or role may do is decided by its AWS permissions.

@@ -32,7 +32,7 @@ const MAX_COMMAND_LENGTH = 20_000;
 const REGIONS_IN_PARALLEL = 6;
 const NO_CLI = 'The AWS CLI was not found on this computer. Install it, then restart the dashboard.';
 const READ_ONLY =
-  'Read-only mode: this command may change or delete resources, so it was not run. Only commands that read (describe, list, get and similar) are allowed.';
+  'Read-only mode: this command may change or delete resources, so it was not run. Only commands that read (describe, list, get and similar) are allowed. To allow it, switch to Write in the top bar.';
 
 export interface AppContext {
   cli: CliTarget | null;
@@ -45,8 +45,14 @@ export interface AppContext {
   extraOrigins: string[];
   /** Folder with the built browser app, or null when it has not been built. */
   publicDir: string | null;
-  /** False (the default way to start) makes the command runner refuse commands that may change resources. */
+  /**
+   * False (the way the dashboard starts) makes the command runner refuse commands that may
+   * change resources. It can be switched while running; it is never saved, so every start
+   * is read-only again.
+   */
   allowChanges: boolean;
+  /** Told when the mode is switched, so the terminal can show it. */
+  onModeChange?: (allowChanges: boolean) => void;
   /** Environment used to locate the AWS config files (tests point it at fixtures). */
   env?: NodeJS.ProcessEnv;
   /** The ~/.aws folder holding the sign-in caches (tests point it elsewhere). */
@@ -157,6 +163,23 @@ export function buildApp(ctx: AppContext): FastifyInstance {
       dataDir: ctx.store.dir,
       allowChanges: ctx.allowChanges,
     };
+  });
+
+  /**
+   * Switches between read-only and write mode. Going to write mode needs the user's
+   * explicit acknowledgement of the risk; going back to read-only needs nothing.
+   */
+  app.put('/api/mode', async (req, reply) => {
+    const body = (req.body ?? {}) as Fields;
+    const allow = body.allowChanges === true;
+    if (allow && body.acknowledged !== true) {
+      return reply.code(400).send({ error: 'Write mode needs the risk to be acknowledged first' });
+    }
+    if (ctx.allowChanges !== allow) {
+      ctx.allowChanges = allow;
+      ctx.onModeChange?.(allow);
+    }
+    return { allowChanges: ctx.allowChanges };
   });
 
   app.get('/api/profiles', async (): Promise<ProfilesResponse> => ({ profiles: loadProfiles() }));

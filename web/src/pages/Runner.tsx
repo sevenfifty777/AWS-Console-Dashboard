@@ -19,7 +19,7 @@ interface Props {
 }
 
 const READ_ONLY_TEXT =
-  'Read-only mode: this command may change or delete resources, so it was not run. Only commands that read (describe, list, get and similar) are allowed.';
+  'Read-only mode: this command may change or delete resources, so it was not run. Only commands that read (describe, list, get and similar) are allowed. To allow it, switch to Write in the top bar.';
 
 type EndEvent = Extract<StreamEvent, { t: 'end' }>;
 type View = 'table' | 'tree' | 'raw';

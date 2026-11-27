@@ -151,6 +151,36 @@ describe('command runner', () => {
     }
   });
 
+  it('switches to write mode only with an acknowledgement, and back to read-only freely', async () => {
+    const mode = (body: object) => call({ method: 'PUT', url: '/api/mode', body });
+    const deleting = { profile: 'default', command: 's3 rm s3://bucket/key' };
+    const switches: boolean[] = [];
+    ctx.onModeChange = (allow) => switches.push(allow);
+    try {
+      expect((await mode({ allowChanges: false })).json()).toEqual({ allowChanges: false });
+      expect((await call({ method: 'POST', url: '/api/run', body: deleting })).statusCode).toBe(403);
+
+      // Asking for write mode without accepting the risk changes nothing.
+      for (const body of [{ allowChanges: true }, { allowChanges: true, acknowledged: 'yes' }, { allowChanges: true, acknowledged: false }]) {
+        expect((await mode(body)).statusCode).toBe(400);
+      }
+      expect((await call({ url: '/api/info' })).json()).toMatchObject({ allowChanges: false });
+      expect((await call({ method: 'POST', url: '/api/run', body: deleting })).statusCode).toBe(403);
+
+      expect((await mode({ allowChanges: true, acknowledged: true })).json()).toEqual({ allowChanges: true });
+      expect((await call({ url: '/api/info' })).json()).toMatchObject({ allowChanges: true });
+      // In write mode each such command still needs its own confirmation.
+      expect((await call({ method: 'POST', url: '/api/run', body: deleting })).statusCode).toBe(409);
+
+      expect((await mode({})).json()).toEqual({ allowChanges: false });
+      expect((await call({ method: 'POST', url: '/api/run', body: { ...deleting, confirmed: true } })).statusCode).toBe(403);
+      expect(switches).toEqual([false, true, false]);
+    } finally {
+      ctx.onModeChange = undefined;
+      ctx.allowChanges = true;
+    }
+  });
+
   it('refuses blocked commands, unknown profiles and bad regions', async () => {
     const run = (body: object) => call({ method: 'POST', url: '/api/run', body });
     expect((await run({ profile: 'default', command: 'configure export-credentials' })).statusCode).toBe(400);
@@ -322,6 +352,14 @@ describe('settings', () => {
     expect(cleared.activeRole).toBeUndefined();
     expect(cleared.allRegions).toBeUndefined();
     expect(cleared.recentRoles).toEqual([]);
+  });
+
+  it('saves a label with a name typed by the user, and drops a name that is too long', async () => {
+    const save = (labels: object) => call({ method: 'PUT', url: '/api/settings', body: { labels } });
+    const saved = (await save({ default: { color: 'purple', text: 'Client ACME (billing)' } })).json();
+    expect(saved.labels).toEqual({ default: { color: 'purple', text: 'Client ACME (billing)' } });
+    const tooLong = (await save({ default: { color: 'purple', text: 'x'.repeat(25) } })).json();
+    expect(tooLong.labels.default).toEqual({ color: 'purple' });
   });
 
   it('saves valid settings and drops values of the wrong shape', async () => {
