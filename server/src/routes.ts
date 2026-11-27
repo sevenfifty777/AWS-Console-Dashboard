@@ -17,6 +17,7 @@ import { StatusService, classifyCliError, loginCommand, logoutCommand } from './
 import { runAws, type CliTarget, type RunOptions } from './aws/cli';
 import { analyseCommand, withDefaultOutput } from './aws/commandLine';
 import { loadAwsFiles } from './aws/configParser';
+import { createKeysProfile, createSsoProfile, readLoginRequest, type Outcome } from './aws/newProfile';
 import { authRoot, buildProfiles } from './aws/profiles';
 import { RegionService, mapLimit } from './aws/regions';
 import { RESOURCES, type ResourceDef } from './aws/resources';
@@ -182,7 +183,64 @@ export function buildApp(ctx: AppContext): FastifyInstance {
     return { allowChanges: ctx.allowChanges };
   });
 
-  app.get('/api/profiles', async (): Promise<ProfilesResponse> => ({ profiles: loadProfiles() }));
+  app.get('/api/profiles', async (): Promise<ProfilesResponse> => {
+    const files = loadAwsFiles(ctx.env);
+    return {
+      profiles: buildProfiles(files),
+      ssoSessions: [...files.ssoSessions].map(([name, s]) => ({ name, startUrl: s.sso_start_url, region: s.sso_region })),
+    };
+  });
+
+  // --- creating profiles -------------------------------------------------------------
+  // Creating a profile changes the local AWS configuration, not AWS itself, so it is
+  // allowed in read-only mode. A name that is already taken is always refused.
+
+  /** Reports failure when the CLI finished without the profile appearing in the files. */
+  const confirmCreated = (outcome: Outcome, reply: FastifyReply) => {
+    statuses.invalidate();
+    if (!outcome.ok) return reply.code(400).send(outcome);
+    if (!loadProfiles().some((p) => p.name === outcome.name)) {
+      return reply.code(500).send({ ok: false, error: 'The AWS CLI finished, but the profile did not appear in the config file.' });
+    }
+    return { ok: true };
+  };
+
+  app.post('/api/profiles/new/keys', async (req, reply) => {
+    if (!ctx.cli) return reply.code(503).send({ error: NO_CLI });
+    return confirmCreated(await createKeysProfile(ctx.cli, loadAwsFiles(ctx.env), (req.body ?? {}) as Fields), reply);
+  });
+
+  app.post('/api/profiles/new/sso', async (req, reply) => {
+    if (!ctx.cli) return reply.code(503).send({ error: NO_CLI });
+    return confirmCreated(await createSsoProfile(ctx.cli, loadAwsFiles(ctx.env), (req.body ?? {}) as Fields), reply);
+  });
+
+  /** A new "aws login" profile: the CLI opens the browser, and writes the profile once the sign-in succeeds. */
+  app.post('/api/profiles/new/login', async (req, reply) => {
+    if (!ctx.cli) return reply.code(503).send({ error: NO_CLI });
+    const request = readLoginRequest(loadAwsFiles(ctx.env), (req.body ?? {}) as Fields);
+    if (!request.ok) return reply.code(400).send(request);
+
+    // Without --region the CLI asks for one, which needs a keyboard.
+    const args = ['login', '--profile', request.name, '--region', request.region];
+    const stream = openStream(reply);
+    stream.send({ t: 'start', args });
+    const result = await runAws(ctx.cli, args, {
+      timeoutMs: LOGIN_TIMEOUT_MS,
+      signal: stream.signal,
+      onStdout: (d) => stream.send({ t: 'out', d }),
+      onStderr: (d) => stream.send({ t: 'err', d }),
+    });
+    // The region given as an option is used for the sign-in; this saves it in the profile too.
+    if (result.code === 0) {
+      await runAws(ctx.cli, ['configure', 'set', 'region', request.region, '--profile', request.name], { timeoutMs: 30_000 });
+    }
+    statuses.invalidate();
+    const { code, ms, timedOut, truncated, cancelled } = result;
+    stream.send({ t: 'end', code, ms, timedOut, truncated, cancelled });
+    stream.end();
+    return reply;
+  });
 
   /** Status of a profile, or with "role" of that role switched to from the profile. */
   app.get('/api/status', async (req, reply): Promise<SessionStatus | FastifyReply> => {

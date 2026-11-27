@@ -8,13 +8,16 @@ import {
   type SessionStatus,
   type Settings,
   type SettingsPatch,
+  type SsoSessionInfo,
 } from '../../../shared/types';
+import { NewProfileDialog } from './NewProfile';
 import { api, errorMessage, streamApi } from '../api';
 import { LabelTag, Notice, StatusBadge, countOf, statusDetail } from '../components';
 import { LABEL_PRESETS, TYPE_LABEL, recheckStatus, useStatus } from '../hooks';
 
 interface Props {
   profiles: Profile[];
+  ssoSessions: SsoSessionInfo[];
   settings: Settings;
   active?: Profile;
   onUse: (name: string) => void;
@@ -34,10 +37,11 @@ interface Job {
 /** Profiles that sign in together share a card; profiles without a sign-in step share one card. */
 const groupKey = (p: Profile) => (p.loginKind === 'none' ? 'none' : p.authGroup);
 
-export function ProfilesPage({ profiles, settings, active, onUse, onSettings }: Props) {
+export function ProfilesPage({ profiles, ssoSessions, settings, active, onUse, onSettings }: Props) {
   const queryClient = useQueryClient();
   const [search, setSearch] = useState('');
   const [job, setJob] = useState<Job | null>(null);
+  const [creating, setCreating] = useState(false);
   const abortRef = useRef<AbortController | null>(null);
 
   const groups = useMemo(() => {
@@ -63,17 +67,18 @@ export function ProfilesPage({ profiles, settings, active, onUse, onSettings }: 
 
   const shownCount = groups.reduce((sum, [, members]) => sum + members.length, 0);
 
-  const signIn = async (profile: Profile, useDeviceCode: boolean) => {
+  /** Runs a browser sign-in on the server and shows its progress in the panel at the top. */
+  const runSignIn = async (title: string, path: string, body: unknown, doneText: string) => {
     abortRef.current?.abort();
     const abort = new AbortController();
     abortRef.current = abort;
-    setJob({ title: `Signing in: ${profile.ssoSession ?? profile.authProfile}`, output: '', running: true });
+    setJob({ title, output: '', running: true });
     const update = (patch: Partial<Job> | ((job: Job) => Partial<Job>)) =>
       setJob((current) => current && { ...current, ...(typeof patch === 'function' ? patch(current) : patch) });
     try {
       await streamApi(
-        '/api/auth/login',
-        { profile: profile.name, useDeviceCode },
+        path,
+        body,
         (event) => {
           if (event.t === 'start') update({ command: `aws ${event.args.join(' ')}` });
           else if (event.t === 'out' || event.t === 'err') update((current) => ({ output: current.output + event.d }));
@@ -83,7 +88,7 @@ export function ProfilesPage({ profiles, settings, active, onUse, onSettings }: 
               : event.timedOut
                 ? 'Sign-in stopped after 5 minutes without completing'
                 : event.code === 0
-                  ? 'Signed in'
+                  ? doneText
                   : `Sign-in failed (exit code ${event.code})`;
             update({ running: false, result, ok: event.code === 0 });
           }
@@ -94,8 +99,25 @@ export function ProfilesPage({ profiles, settings, active, onUse, onSettings }: 
       update({ running: false, ok: false, result: abort.signal.aborted ? 'Sign-in cancelled' : errorMessage(err) });
     } finally {
       update((current) => (current.running ? { running: false, result: current.result ?? 'Sign-in cancelled' } : {}));
+      await queryClient.invalidateQueries({ queryKey: ['profiles'] });
       await queryClient.invalidateQueries({ queryKey: ['status'] });
     }
+  };
+
+  const signIn = (profile: Profile, useDeviceCode: boolean) =>
+    runSignIn(`Signing in: ${profile.ssoSession ?? profile.authProfile}`, '/api/auth/login', { profile: profile.name, useDeviceCode }, 'Signed in');
+
+  /** A new "aws login" profile exists only once its first sign-in has succeeded. */
+  const createLoginProfile = (name: string, region: string) => {
+    setCreating(false);
+    void runSignIn(`New profile: ${name}`, '/api/profiles/new/login', { name, region }, `Profile "${name}" was created and is signed in`);
+  };
+
+  const profileCreated = async (message: string) => {
+    setCreating(false);
+    setJob({ title: 'New profile', output: '', running: false, ok: true, result: message });
+    await queryClient.invalidateQueries({ queryKey: ['profiles'] });
+    await queryClient.invalidateQueries({ queryKey: ['status'] });
   };
 
   // SSO is one sign-in per session, shared by all its profiles, and "aws sso logout"
@@ -162,7 +184,22 @@ export function ProfilesPage({ profiles, settings, active, onUse, onSettings }: 
         <button className="btn" type="button" onClick={() => void queryClient.invalidateQueries({ queryKey: ['status'] })}>
           Refresh status
         </button>
+        <span className="spacer" />
+        <button className="btn primary" type="button" disabled={job?.running ?? false} onClick={() => setCreating(true)}>
+          New profile
+        </button>
       </div>
+
+      {creating && (
+        <NewProfileDialog
+          ssoSessions={ssoSessions}
+          existingNames={profiles.map((p) => p.name)}
+          defaultRegion={active?.region}
+          onClose={() => setCreating(false)}
+          onCreated={(message) => void profileCreated(message)}
+          onLogin={createLoginProfile}
+        />
+      )}
 
       {job && (
         <div className="card job">
@@ -190,7 +227,7 @@ export function ProfilesPage({ profiles, settings, active, onUse, onSettings }: 
         </div>
       )}
 
-      {groups.length === 0 && <p className="faint">No profile matches the search.</p>}
+      {groups.length === 0 && profiles.length > 0 && <p className="faint">No profile matches the search.</p>}
 
       {groups.map(([key, members]) => (
         <GroupCard

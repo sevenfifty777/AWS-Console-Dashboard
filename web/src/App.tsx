@@ -212,6 +212,7 @@ function Dashboard() {
     : 'no profile';
 
   const loadError = profilesQuery.error ?? stateQuery.error;
+  const noProfiles = profiles.length === 0 && !loadError;
   const save = (patch: SettingsPatch) => saveSettings.mutate(patch);
   /** Changing profile also leaves any role, which was switched to from the previous profile. */
   const selectProfile = (name: string) => save({ activeProfile: name, activeRole: null });
@@ -314,20 +315,29 @@ function Dashboard() {
 
         {profilesQuery.isPending || stateQuery.isPending ? (
           <p className="faint">Loading profiles…</p>
-        ) : profiles.length === 0 && !loadError ? (
-          <Notice tone="info">
-            No AWS CLI profiles were found in <code>{info.data?.configFile ?? 'the AWS config file'}</code>. Create one in a
-            terminal with <code>aws login</code>, <code>aws configure sso</code> or <code>aws configure</code>, then come
-            back to this tab.
-          </Notice>
         ) : (
           <>
-            {page === 'profiles' && (
-              <ProfilesPage profiles={profiles} settings={settings} active={active} onUse={selectProfile} onSettings={save} />
+            {/* The Profiles page keeps its place below whether or not profiles exist, so what it
+                shows (such as the result of creating the first profile) survives the change. */}
+            {noProfiles && (
+              <Notice tone="info">
+                No AWS CLI profiles were found in <code>{info.data?.configFile ?? 'the AWS config file'}</code>. Create the
+                first one with <strong>New profile</strong> on the Profiles page.
+              </Notice>
             )}
-            {page === 'roles' && <RolesPage active={active} role={role} settings={settings} onSettings={save} />}
+            {page === 'profiles' && (
+              <ProfilesPage
+                profiles={profiles}
+                ssoSessions={profilesQuery.data?.ssoSessions ?? []}
+                settings={settings}
+                active={active}
+                onUse={selectProfile}
+                onSettings={save}
+              />
+            )}
+            {page === 'roles' && !noProfiles && <RolesPage active={active} role={role} settings={settings} onSettings={save} />}
             {/* The runner stays mounted so a running command and its output survive a page switch. */}
-            <div hidden={page !== 'runner'}>
+            <div hidden={page !== 'runner' || noProfiles}>
               <RunnerPage
                 active={active}
                 role={role}
@@ -338,7 +348,7 @@ function Dashboard() {
                 appState={stateQuery.data}
               />
             </div>
-            {page === 'resources' && (
+            {page === 'resources' && !noProfiles && (
               <ResourcesPage
                 active={active}
                 role={role}

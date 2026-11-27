@@ -42,6 +42,8 @@ export interface RunOptions {
   region?: string;
   /** Run as an assumed role. The profile is still used for its region and other settings. */
   credentials?: RoleCredentials;
+  /** Text typed into the command, for the few CLI commands that ask questions. */
+  input?: string;
   timeoutMs?: number;
   maxBytes?: number;
   signal?: AbortSignal;
@@ -129,8 +131,13 @@ export function runAws(target: CliTarget, args: string[], options: RunOptions = 
       env: childEnv(process.env, options.profile, options.region, options.credentials),
       shell: false,
       windowsHide: true,
-      stdio: ['ignore', 'pipe', 'pipe'],
+      stdio: [options.input === undefined ? 'ignore' : 'pipe', 'pipe', 'pipe'],
     });
+    if (options.input !== undefined && child.stdin) {
+      // The command may exit before reading everything; that is not an error worth reporting.
+      child.stdin.on('error', () => {});
+      child.stdin.end(options.input);
+    }
 
     const timer = setTimeout(() => {
       timedOut = true;

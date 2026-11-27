@@ -102,8 +102,22 @@ export interface AppInfo {
   allowChanges: boolean;
 }
 
+/** An [sso-session] block of the config file: one SSO sign-in that profiles can share. */
+export interface SsoSessionInfo {
+  name: string;
+  startUrl?: string;
+  region?: string;
+}
+
 export interface ProfilesResponse {
   profiles: Profile[];
+  ssoSessions: SsoSessionInfo[];
+}
+
+/** Answer to a request that creates a profile. */
+export interface CreateResult {
+  ok: boolean;
+  error?: string;
 }
 
 export interface CommandCheck {

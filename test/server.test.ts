@@ -1,10 +1,10 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { FastifyInstance } from 'fastify';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import type { AppState, ResourceResult, StreamEvent } from '../shared/types';
+import type { AppState, Profile, ResourceResult, StreamEvent } from '../shared/types';
 import { findAwsCli } from '../server/src/aws/cli';
 import { buildApp, type AppContext } from '../server/src/routes';
 import { resolveStatic } from '../server/src/static';
@@ -41,6 +41,10 @@ beforeAll(() => {
   writeFileSync(join(dir, 'public', 'assets', 'app.js'), 'console.log(1)');
   writeFileSync(join(dir, 'secret.txt'), 'outside the public folder');
 
+  // The stand-in CLI writes new profiles to the files these two variables name.
+  process.env.AWS_CONFIG_FILE = join(dir, 'config');
+  process.env.AWS_SHARED_CREDENTIALS_FILE = join(dir, 'credentials');
+
   ctx = {
     cli: findAwsCli({ AWS_DASHBOARD_CLI: FAKE_CLI }),
     cliVersion: 'fake',
@@ -58,6 +62,8 @@ beforeAll(() => {
 
 afterAll(async () => {
   await app.close();
+  delete process.env.AWS_CONFIG_FILE;
+  delete process.env.AWS_SHARED_CREDENTIALS_FILE;
   rmSync(dir, { recursive: true, force: true });
 });
 
@@ -390,6 +396,105 @@ describe('settings', () => {
     expect(saved.json()).toEqual([{ name: 'Who am I', command: 'sts get-caller-identity' }]);
     expect((await call({ method: 'DELETE', url: '/api/history' })).json()).toEqual({ ok: true });
     expect(((await call({ url: '/api/state' })).json() as AppState).history).toEqual([]);
+  });
+});
+
+// Kept after the other groups: these tests add profiles to the config file they all share.
+describe('creating profiles', () => {
+  const create = (kind: string, body: object) => call({ method: 'POST', url: `/api/profiles/new/${kind}`, body });
+  const configText = () => readFileSync(join(dir, 'config'), 'utf8');
+  const profileNamed = async (name: string) =>
+    ((await call({ url: '/api/profiles' })).json().profiles as Profile[]).find((p) => p.name === name);
+  const keys = { accessKeyId: 'TESTKEYID00000000000', secretAccessKey: 'FakeSecretKeyValue/Fake+Secret=0000', region: 'eu-west-3' };
+
+  it('creates an access-key profile by answering the questions of aws configure', async () => {
+    const res = await create('keys', { name: 'new-keys', ...keys });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({ ok: true });
+    expect(await profileNamed('new-keys')).toMatchObject({ type: 'keys', region: 'eu-west-3' });
+    // The secret reached the CLI through its input, and the CLI (not the dashboard) stored it.
+    expect(readFileSync(join(dir, 'credentials'), 'utf8')).toContain(`aws_secret_access_key = ${keys.secretAccessKey}`);
+    expect(JSON.stringify((await call({ url: '/api/profiles' })).json())).not.toContain(keys.secretAccessKey);
+  });
+
+  it('refuses a bad name, a name already taken and malformed values, writing nothing', async () => {
+    const before = configText();
+    const changes = [
+      { name: 'bad name' },
+      { name: '--debug' },
+      { name: 'default' },
+      { name: 'new-keys' },
+      { accessKeyId: 'lowercase-key-id-0000' },
+      { secretAccessKey: 'two-lines-two-lines\ntwo-lines-two-lines' },
+      { region: 'nowhere' },
+    ];
+    for (const change of changes) {
+      expect((await create('keys', { name: 'another', ...keys, ...change })).statusCode).toBe(400);
+    }
+    expect(configText()).toBe(before);
+  });
+
+  it('creates an SSO profile with a new SSO session, then another on the same session', async () => {
+    const before = configText();
+    const first = await create('sso', {
+      name: 'acct-a',
+      session: 'corp',
+      newSession: { startUrl: 'https://corp.awsapps.com/start', region: 'eu-west-1' },
+      accountId: '123456789012',
+      roleName: 'ReadOnlyAccess',
+      region: 'eu-central-1',
+    });
+    expect(first.json()).toEqual({ ok: true });
+    // The session block is added at the end; what was there before is unchanged.
+    expect(configText().startsWith(before)).toBe(true);
+    expect(configText()).toContain(
+      '[sso-session corp]\nsso_start_url = https://corp.awsapps.com/start\nsso_region = eu-west-1\nsso_registration_scopes = sso:account:access\n',
+    );
+    const a = await profileNamed('acct-a');
+    expect(a).toMatchObject({
+      type: 'sso',
+      ssoSession: 'corp',
+      ssoStartUrl: 'https://corp.awsapps.com/start',
+      accountId: '123456789012',
+      roleName: 'ReadOnlyAccess',
+      region: 'eu-central-1',
+      problems: [],
+    });
+
+    const second = await create('sso', { name: 'acct-b', session: 'corp', accountId: '210987654321', roleName: 'Admin', region: 'eu-west-1' });
+    expect(second.json()).toEqual({ ok: true });
+    expect((await profileNamed('acct-b'))?.authGroup).toBe(a?.authGroup);
+    expect((await call({ url: '/api/profiles' })).json().ssoSessions).toEqual([
+      { name: 'corp', startUrl: 'https://corp.awsapps.com/start', region: 'eu-west-1' },
+    ]);
+  });
+
+  it('refuses an unknown session, a second session of the same name and values of the wrong shape', async () => {
+    const good = { name: 'acct-c', session: 'corp', accountId: '123456789012', roleName: 'ReadOnlyAccess', region: 'eu-west-1' };
+    const newSession = { startUrl: 'https://other.awsapps.com/start', region: 'eu-west-1' };
+    const before = configText();
+    for (const change of [
+      { session: 'nowhere' },
+      { newSession },
+      { session: 'other', newSession: { ...newSession, startUrl: 'http://other.awsapps.com/start' } },
+      { session: 'other', newSession: { ...newSession, region: 'nowhere' } },
+      { accountId: '123' },
+      { roleName: '--debug' },
+    ]) {
+      expect((await create('sso', { ...good, ...change })).statusCode).toBe(400);
+    }
+    expect(configText()).toBe(before);
+  });
+
+  it('creates an aws login profile through the browser sign-in and saves its region', async () => {
+    const res = await create('login', { name: 'home2', region: 'eu-west-2' });
+    expect(res.statusCode).toBe(200);
+    const list = events(res.payload);
+    expect(list[0]).toEqual({ t: 'start', args: ['login', '--profile', 'home2', '--region', 'eu-west-2'] });
+    expect(list.at(-1)).toMatchObject({ t: 'end', code: 0 });
+    expect(await profileNamed('home2')).toMatchObject({ type: 'login', region: 'eu-west-2', accountId: '111111111111' });
+    expect((await create('login', { name: 'home2', region: 'eu-west-2' })).statusCode).toBe(400);
+    expect((await create('login', { name: 'home3', region: 'nowhere' })).statusCode).toBe(400);
   });
 });
 

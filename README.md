@@ -67,6 +67,16 @@ session status.
 - Assume-role profiles follow the profile they get their credentials from.
 - **Use** makes a profile the active one for the other two pages. This is a dashboard
   setting only: your terminals and config files are not changed.
+- **New profile** creates a profile without a terminal, in one of three ways:
+  - *AWS login*: give a name and region; your browser opens to sign in (`aws login`).
+  - *SSO*: give a name, the SSO session (an existing one, or a new one with its start URL
+    and SSO region), the account ID, the role name and a region. Then press **Sign in** on
+    its group if the session is not signed in yet.
+  - *Access keys*: give a name, the access key ID, the secret access key and a region
+    (`aws configure`).
+
+  A name that is already in use is refused, so creating never overwrites a profile. To
+  change or remove a profile, edit the AWS config file or use the AWS CLI.
 - Pin profiles to the top, and give them a coloured label: a ready-made one such as
   Production, or a name you type yourself (**Custom name…**, up to 24 characters). The label
   of the active profile is shown on every page, and in the profile list of the top bar.
@@ -133,8 +143,15 @@ The dashboard can run AWS commands, so it is built to answer only your own brows
   websites are refused.
 - It starts only the `aws` executable found on your PATH (plus the system tools that open
   the browser and stop a cancelled command).
-- It never writes to `~/.aws`. It reads profile settings, and from the sign-in caches only
-  the expiry date. The keys of your profiles are not kept, displayed or logged.
+- It reads profile settings from `~/.aws`, and from the sign-in caches only the expiry
+  date. The keys of your profiles are not kept, displayed or logged.
+- It changes `~/.aws` only when you create a profile, and then through the AWS CLI's own
+  commands (`aws configure`, `aws configure set`, `aws login`). The one thing it writes
+  itself is the block of a new SSO session, added at the end of the config file, because
+  the CLI has no command for that which works without a keyboard. Existing lines are never
+  changed or removed.
+- A secret access key typed into the New profile form goes from the page to the dashboard
+  on this computer and straight into `aws configure`, which stores it as it always does.
 - The one exception: after you switch to an IAM role, the dashboard holds that role's
   temporary keys (valid one hour) so that it can run commands as the role. They stay in
   its memory, are never written to disk or sent to the browser, and are gone when it stops.
@@ -182,4 +199,6 @@ shared/types.ts    data shapes used by both sides
 ## Known limits
 
 - Signing out of SSO ends every SSO session on the computer; that is how `aws sso logout` works.
-- Profiles cannot be created or edited from the dashboard yet. Use the AWS CLI for that.
+- Profiles can be created from the dashboard but not edited or removed.
+- A new SSO profile needs the account ID and role name typed in; there is no pick-list of
+  the accounts and roles of the session.

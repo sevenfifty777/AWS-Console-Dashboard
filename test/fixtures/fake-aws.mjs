@@ -1,6 +1,8 @@
 // Stand-in for the AWS CLI, used by the tests through AWS_DASHBOARD_CLI.
 // It answers a handful of commands the way the real CLI does, including the
 // error texts for an expired SSO session and for a role without permission.
+import { appendFileSync, readFileSync } from 'node:fs';
+
 const args = process.argv.slice(2);
 const profile = process.env.AWS_PROFILE ?? 'default';
 const starts = (...words) => words.every((word, index) => args[index] === word);
@@ -92,6 +94,20 @@ if (args[0] === '--version') {
       { ...plain, name: '\\052.example.com.', type: 'CNAME', ttl: 300, values: ['example.com'], setId: 'blue', weight: 80 },
     ]),
   );
+} else if (args[0] === 'configure' && args[1] === '--profile') {
+  // "aws configure" asks four questions and reads the answers from its input.
+  const [keyId, secret, region, output] = readFileSync(0, 'utf8').split(/\r?\n/);
+  if (!keyId || !secret || !region || !output) fail('fake aws: configure expected four answers', 2);
+  appendFileSync(process.env.AWS_SHARED_CREDENTIALS_FILE, `\n[${args[2]}]\naws_access_key_id = ${keyId}\naws_secret_access_key = ${secret}\n`);
+  appendFileSync(process.env.AWS_CONFIG_FILE, `\n[profile ${args[2]}]\nregion = ${region}\noutput = ${output}\n`);
+} else if (starts('configure', 'set')) {
+  const name = args[args.indexOf('--profile') + 1];
+  appendFileSync(process.env.AWS_CONFIG_FILE, `\n[profile ${name}]\n${args[2]} = ${args[3]}\n`);
+} else if (args[0] === 'login') {
+  // The real command opens the browser, and writes the profile once the sign-in is done.
+  const name = args[args.indexOf('--profile') + 1];
+  console.log('Attempting to open your default browser.');
+  appendFileSync(process.env.AWS_CONFIG_FILE, `\n[profile ${name}]\nlogin_session = arn:aws:iam::111111111111:user/${name}\n`);
 } else if (starts('sleep')) {
   // Never finishes by itself: used to test the time limit and cancelling.
   setTimeout(() => {}, 60_000);
